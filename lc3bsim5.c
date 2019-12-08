@@ -50,6 +50,7 @@ int mask3(int bin);
 int mask4(int bin);
 int mask5(int bin);
 int mask6(int bin);
+int mask7(int bin);
 int mask8(int bin);
 int mask9(int bin);
 int mask11(int bin);
@@ -118,6 +119,21 @@ enum CS_BITS {
     GATE_SSP,
     VECTORPC,
     LD_VOUT,
+    JSELECT3, JSELECT2, JSELECT1, JSELECT0,
+    RETURN,
+    LD_VA,
+    LD_JTEMP,
+    LD_M,
+    GATE_MAR,
+    GATE_ADDR,
+    GATE_VA,
+    TRANSLATE,
+    MDRSEL,
+    INPTE,
+    INTRAP,
+    SETM,
+    LD_MDRB,
+    MEMMUX,
 /* MODIFY: you have to add all your new control signals */
     CONTROL_STORE_BITS
 } CS_BITS;
@@ -161,6 +177,25 @@ int GetSSPMUX(int *x)         { return((x[SSPMUX1] << 1) + x[SSPMUX0]); }
 int GetGATE_SSP(int *x)      { return(x[GATE_SSP]); }
 int GetGATE_PSR(int *x)      { return(x[GATE_PSR]); }
 int GetGATE_R6(int *x)      { return(x[GATE_R6]); }
+
+int GetRETURN(int *x)      { return(x[RETURN]); }
+int GetLD_VA(int *x)      { return(x[LD_VA]); }
+int GetLD_JTEMP(int *x)      { return(x[LD_JTEMP]); }
+int GetLD_M(int *x)      { return(x[LD_M]); }
+int GetGATE_MAR(int *x)      { return(x[GATE_MAR]); }
+int GetGATE_ADDR(int *x)      { return(x[GATE_ADDR]); }
+int GetGATE_VA(int *x)      { return(x[GATE_VA]); }
+int GetTRANSLATE(int *x)      { return(x[TRANSLATE]); }
+int GetMDRSEL(int *x)      { return(x[MDRSEL]); }
+int GetInPTE(int *x)      { return(x[INPTE]); }
+int GetInTRAP(int *x)      { return(x[INTRAP]); }
+int GetJSELECT(int *x)     {
+					     return((x[JSELECT3] << 3) +
+						 	(x[JSELECT2] << 2) +
+				      	 	(x[JSELECT1] << 1) +
+						 	(x[JSELECT0]));
+				    }
+
 /***************************************************************/
 /* The control store rom.                                      */
 /***************************************************************/
@@ -225,6 +260,9 @@ int VOUT; /* Vector out */
 /* For lab 5 */
 int PTBR; /* This is initialized when we load the page table */
 int VA;   /* Temporary VA register */
+int M;
+int JTEMP;
+int MDRB;
 /* MODIFY: you should add here any other registers you need to implement virtual memory */
 
 } System_Latches;
@@ -372,7 +410,13 @@ void rdump(FILE * dumpsim_file) {
     printf("STATE_NUMBER : 0x%0.4x\n\n", CURRENT_LATCHES.STATE_NUMBER);
     printf("BUS          : 0x%0.4x\n", BUS);
     printf("MDR          : 0x%0.4x\n", CURRENT_LATCHES.MDR);
+    printf("MDRB         : 0x%0.4x\n", CURRENT_LATCHES.MDRB);
     printf("MAR          : 0x%0.4x\n", CURRENT_LATCHES.MAR);
+    printf("VA           : 0x%0.4x\n", CURRENT_LATCHES.VA);
+    printf("JTEMP        : 0x%0.4x\n", CURRENT_LATCHES.JTEMP);
+    printf("M            : 0x%0.4x\n", CURRENT_LATCHES.M);
+    printf("VOUT         : 0x%0.4x\n", CURRENT_LATCHES.VOUT);
+
     printf("CCs: N = %d  Z = %d  P = %d\n", CURRENT_LATCHES.N, CURRENT_LATCHES.Z, CURRENT_LATCHES.P);
     printf("Registers:\n");
     for (k = 0; k < LC_3b_REGS; k++)
@@ -706,12 +750,23 @@ int MDRLogicOut = 0;
 int MEMOut = 0;
 int memCycle = 1;
 
+//Lab 5 New Outs
+int MDRMask = 0;
+int MDRSelOut = 0;
+int TranslateOut = 0;
+int GateADDR = 0;
+int MOut = 0xF;
+int Select_53 = 0;
+int JMuxOut = 0;
+int SELEX = 0;
+
 void eval_micro_sequencer()
 {
       /* Exception Determination Logic */
-      int U = 0; /*  Unaligned */
-      int P = 0; /* Protection */
-      int K = 0; /*  Unknown   */
+      int U = 0; /*  Unaligned  */
+      int P = 0; /*  Protection */
+      int K = 0; /*  Unknown    */
+	int F = 0; /*  Pagefault  */
 
       int dS = CURRENT_LATCHES.MICROINSTRUCTION[DATA_SIZE];
       int cMAR = CURRENT_LATCHES.MAR;
@@ -720,15 +775,60 @@ void eval_micro_sequencer()
       int pStR = CURRENT_LATCHES.PSR;
       int psr15 = mask1(CURRENT_LATCHES.PSR >> 15);
 
+	int cMDR = CURRENT_LATCHES.MDR;
+	int inPTE = CURRENT_LATCHES.MICROINSTRUCTION[INPTE];
+	int inTRA = CURRENT_LATCHES.MICROINSTRUCTION[INTRAP];
+
+	int JMuxSel = GetJSELECT(CURRENT_LATCHES.MICROINSTRUCTION);
+	switch (JMuxSel)
+	{
+
+		case 0: JMuxOut = 54;
+			  break;
+		case 1: JMuxOut = 24;
+			  break;
+		case 2: JMuxOut = 23;
+			  break;
+		case 3: JMuxOut = 25;
+			  break;
+		case 4: JMuxOut = 29;
+			  break;
+		case 5: JMuxOut = 28;
+			  break;
+		case 6: JMuxOut = 49;
+			  break;
+		case 7: JMuxOut = 45;
+			  break;
+		case 8: JMuxOut = 41;
+			  break;
+		case 9: JMuxOut = 53;
+			  break;
+		case 10: JMuxOut = 57;
+			  break;
+		default: 0;
+	}
+	if (CURRENT_LATCHES.MICROINSTRUCTION[LD_JTEMP] == 1) NEXT_LATCHES.JTEMP = JMuxOut;
+	else NEXT_LATCHES.JTEMP = CURRENT_LATCHES.JTEMP;
+
       U = dS & mask1(cMAR) & psr15;
 
-      if ((cMAR <= restriction) && (psr15 == 1)) P = 1;
-      else P = 0;
-
-      if (((iR_15_12 == 0xA) | (iR_15_12 == 0xB)) & psr15) K = 1;
+      if (((iR_15_12 == 0xA) || (iR_15_12 == 0xB)) && psr15) K = 1;
       else K = 0;
 
-      int S = U | P | K;
+	if (K == 1) SELEX = 1;
+	if (U == 1) SELEX = 0;
+
+	U |= K; 		//Combined control
+
+	if ((inPTE == 1) && (mask1(cMDR >> 3) == 0) && (psr15 == 1)) P = 1;
+	else P = 0;
+
+	if ((inPTE == 1) && (mask1(cMDR >> 2) == 0)) F = 1;
+	else F = 0;
+
+	F = (F & (~(F & P)));
+
+      int S = U | P | F;
 
       int IRDMuxOut = (S == 0) ? CURRENT_LATCHES.MICROINSTRUCTION[IRD] : 0;
       INTVOrOut = (CURRENT_LATCHES.INTV != 0) ? 1 : 0;
@@ -749,11 +849,11 @@ void eval_micro_sequencer()
 		int rB = CURRENT_LATCHES.READY;
 		int aM = mask1(CURRENT_LATCHES.IR >> 11);
 		int j5 = CURRENT_LATCHES.MICROINSTRUCTION[J5];
-            j5 = j5 | U | P | K;
+            j5 = j5 | U | P | F;
 		int j4 = CURRENT_LATCHES.MICROINSTRUCTION[J4];
-            j4 = ((U & ~P) | (j4 & ~P) | K);
+            j4 = ((U & ~P) | (j4 & ~P) | F);
 		int j3 = CURRENT_LATCHES.MICROINSTRUCTION[J3];
-            j3 = U | P | (~K & j3);
+            j3 = U | P | (~F & j3);
 		int j2 = (S == 0) ? CURRENT_LATCHES.MICROINSTRUCTION[J2] : 0;
             j2 = j2 | checkTMuxOut;
 		int j1 = (S == 0) ? CURRENT_LATCHES.MICROINSTRUCTION[J1] : 0;
@@ -764,6 +864,15 @@ void eval_micro_sequencer()
 		j2 = j2 | branch;
 		j1 = j1 | ready;
 		j0 = j0 | addressMode;
+		if (GetRETURN(CURRENT_LATCHES.MICROINSTRUCTION) == 1)
+		{
+			j5 = mask1(CURRENT_LATCHES.JTEMP >> 5);
+			j4 = mask1(CURRENT_LATCHES.JTEMP >> 4);
+			j3 = mask1(CURRENT_LATCHES.JTEMP >> 3);
+			j2 = mask1(CURRENT_LATCHES.JTEMP >> 2);
+			j1 = mask1(CURRENT_LATCHES.JTEMP >> 1);
+			j0 = mask1(CURRENT_LATCHES.JTEMP);
+		}
 		nextInstruction = decipherState(j5, j4, j3, j2, j1, j0);
 		latchNext(nextInstruction);
 	}
@@ -814,8 +923,16 @@ void cycle_memory()
                   }
                   else
                   {
-                        MEMORY[CURRENT_LATCHES.MAR/2][0] = mask8(CURRENT_LATCHES.MDR);
-                        MEMORY[CURRENT_LATCHES.MAR/2][1] = mask8(CURRENT_LATCHES.MDR >> 8);
+				if (CURRENT_LATCHES.MICROINSTRUCTION[MEMMUX] == 1)
+				{
+					MEMORY[CURRENT_LATCHES.MAR/2][0] = mask8(CURRENT_LATCHES.MDRB);
+	                        MEMORY[CURRENT_LATCHES.MAR/2][1] = mask8(CURRENT_LATCHES.MDRB >> 8);
+				}
+				else
+				{
+					MEMORY[CURRENT_LATCHES.MAR/2][0] = mask8(CURRENT_LATCHES.MDR);
+	                        MEMORY[CURRENT_LATCHES.MAR/2][1] = mask8(CURRENT_LATCHES.MDR >> 8);
+				}
                   }
             }
       }
@@ -880,9 +997,16 @@ void evalStatusAndVector(int iR)
       else if (PSRMuxSel == 2) PSRMuxOut = Low16bits(CURRENT_LATCHES.PSR & 0x7FFF);
 
       int EXCSel = GetEXCSEL(CURRENT_LATCHES.MICROINSTRUCTION);
-      if (EXCSel == 0) EXCSELMuxOut = 0x02 << 1;
-      else if (EXCSel == 1) EXCSELMuxOut = 0x03 << 1;
-      else if (EXCSel == 2) EXCSELMuxOut = 0x04 << 1;
+      if (EXCSel == 0) EXCSELMuxOut = 0x04 << 1;
+      else if (EXCSel == 1)
+	{
+		if (SELEX == 1)
+		{
+			EXCSELMuxOut = 0x05 << 1;
+		}
+		else EXCSELMuxOut = 0x03 << 1;
+	}
+      else if (EXCSel == 2) EXCSELMuxOut = 0x02 << 1;
 
       int INTVOut = CURRENT_LATCHES.INTV << 1;
 
@@ -891,6 +1015,8 @@ void evalStatusAndVector(int iR)
       else if (IESel == 1) IEMuxOut = INTVOut;
 
       vPlusOut = CURRENT_LATCHES.VTBR + IEMuxOut;
+
+	GateADDR = (CURRENT_LATCHES.MDR & 0x3E00) + mask9(CURRENT_LATCHES.VA);
 }
 
 void math(int iR)
@@ -961,6 +1087,9 @@ void drive_bus()
 	else if (GetGATE_SSP(CURRENT_LATCHES.MICROINSTRUCTION) == 1) BUS = Low16bits(CURRENT_LATCHES.SSP);
       else if (GetGATE_PSR(CURRENT_LATCHES.MICROINSTRUCTION) == 1) BUS = Low16bits(PSRMuxOut);
       else if (GetGATE_R6(CURRENT_LATCHES.MICROINSTRUCTION) == 1) BUS = Low16bits(CURRENT_LATCHES.REGS[6]);
+	else if (GetGATE_MAR(CURRENT_LATCHES.MICROINSTRUCTION) == 1) BUS = CURRENT_LATCHES.MAR;
+	else if (GetGATE_ADDR(CURRENT_LATCHES.MICROINSTRUCTION) == 1) BUS = Low16bits(GateADDR);
+	else if (GetGATE_VA(CURRENT_LATCHES.MICROINSTRUCTION) == 1) BUS = Low16bits(CURRENT_LATCHES.VA);
 	else BUS = 0;
   /*
    * Datapath routine for driving the bus from one of the 5 possible
@@ -974,6 +1103,11 @@ void latch_datapath_values()
       if (flag == 1) NEXT_LATCHES.INTV = 0;
       if (CURRENT_LATCHES.MICROINSTRUCTION[CHECKT] == 1 && CYCLE_COUNT > 300) flag = 1;
       if (CYCLE_COUNT == 299) NEXT_LATCHES.INTV = 0x01;
+	if (CURRENT_LATCHES.MICROINSTRUCTION[LD_VA] == 1)
+	{
+		NEXT_LATCHES.VA = Low16bits(BUS);
+	}
+	else NEXT_LATCHES.VA = CURRENT_LATCHES.VA;
       if (CURRENT_LATCHES.MICROINSTRUCTION[LD_VOUT] == 1)
       {
             NEXT_LATCHES.VOUT = vPlusOut;
@@ -1085,40 +1219,50 @@ void latch_datapath_values()
               int MARMUX2Sel = CURRENT_LATCHES.MICROINSTRUCTION[MARMUX2];
               if (MARMUX2Sel == 0) MARMUX2Out = Low16bits(BUS);
               else if (MARMUX2Sel == 1) MARMUX2Out = Low16bits(CURRENT_LATCHES.SSP);
-              NEXT_LATCHES.MAR = MARMUX2Out;
+		  int addTemp = CURRENT_LATCHES.PTBR + mask8((CURRENT_LATCHES.MAR >> 9) << 1);
+	  	  if (CURRENT_LATCHES.MICROINSTRUCTION[TRANSLATE] == 1) TranslateOut = addTemp;
+	  	  else TranslateOut = MARMUX2Out;
+              NEXT_LATCHES.MAR = TranslateOut;
         }
         else NEXT_LATCHES.MAR = CURRENT_LATCHES.MAR;
 
-	  if (nextInstruction == 12)
+	  if (CURRENT_LATCHES.MICROINSTRUCTION[LD_M] == 1)
 	  {
-		  NEXT_LATCHES.MAR = CURRENT_LATCHES.REGS[mask3(CURRENT_LATCHES.IR >> 6)];
+		  NEXT_LATCHES.M = CURRENT_LATCHES.MICROINSTRUCTION[SETM];
 	  }
-	  else if (nextInstruction == 4)
+	  else NEXT_LATCHES.M = CURRENT_LATCHES.M;
+
+	  if (CURRENT_LATCHES.MICROINSTRUCTION[LD_MDRB] == 1)
 	  {
-		  if (mask1(CURRENT_LATCHES.IR >> 11) == 0)
-		  {
-			  NEXT_LATCHES.MAR = CURRENT_LATCHES.REGS[mask3(CURRENT_LATCHES.IR >> 6)];
-		  }
-		  else if (mask1(CURRENT_LATCHES.IR >> 11) == 1)
-		  {
-			  NEXT_LATCHES.MAR = CURRENT_LATCHES.PC + mask11(CURRENT_LATCHES.IR);
-		  }
+		  NEXT_LATCHES.MDRB = Low16bits(BUS);
 	  }
+	  else NEXT_LATCHES.MDRB = CURRENT_LATCHES.MDRB;
 
         if (CURRENT_LATCHES.MICROINSTRUCTION[LD_MDR] == 1)
         {
-              if (CURRENT_LATCHES.MICROINSTRUCTION[MIO_EN] == 0)
-              {
-                  if (CURRENT_LATCHES.MICROINSTRUCTION[DATA_SIZE] == 0)
-                  {
-                        NEXT_LATCHES.MDR = mask8(BUS) + (mask8(BUS) << 8);
-                  }
-                  else
-                  {
-                        NEXT_LATCHES.MDR = Low16bits(BUS);
-                  }
-              }
-              else NEXT_LATCHES.MDR = MEMOut;
+		  if (CURRENT_LATCHES.MICROINSTRUCTION[MDRSEL] == 1)
+		  {
+			  if (CURRENT_LATCHES.M == 0)
+			  {
+				  NEXT_LATCHES.MDR = (CURRENT_LATCHES.MDR | 0x0001);
+			  }
+			  else NEXT_LATCHES.MDR = (CURRENT_LATCHES.MDR | 0x0003);
+		  }
+		  else
+		  {
+	              if (CURRENT_LATCHES.MICROINSTRUCTION[MIO_EN] == 0)
+	              {
+	                  if (CURRENT_LATCHES.MICROINSTRUCTION[DATA_SIZE] == 0)
+	                  {
+	                        NEXT_LATCHES.MDR = mask8(BUS) + (mask8(BUS) << 8);
+	                  }
+	                  else
+	                  {
+	                        NEXT_LATCHES.MDR = Low16bits(BUS);
+	                  }
+	              }
+	              else NEXT_LATCHES.MDR = MEMOut;
+		  }
         }
         else NEXT_LATCHES.MDR = CURRENT_LATCHES.MDR;
   /*
@@ -1214,6 +1358,10 @@ int mask5(int bin)
 int mask6(int bin)
 {
 	return (bin & 0x003F);
+}
+int mask7(int bin)
+{
+	return (bin & 0x007F);
 }
 int mask8(int bin)
 {
